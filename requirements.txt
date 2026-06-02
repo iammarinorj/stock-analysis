@@ -1,0 +1,17 @@
+# Core
+streamlit>=1.54,<2.0
+yfinance>=1.4.0,<1.5
+finvizfinance>=1.3,<2.0
+pandas>=2.3,<3.0
+numpy>=2.4,<3.0
+plotly>=6.7,<7.0
+requests>=2.32,<3.0
+beautifulsoup4>=4.14,<5.0
+lxml>=6.0,<7.0
+scipy>=1.15,<2.0
+
+# Optional: persistent HTTP cache (survives app restarts)
+requests-cache>=1.2,<2.0
+
+# Optional: Claude AI sidebar chat (requires ANTHROPIC_API_KEY secret)
+anthropic>=0.76,<1.0
