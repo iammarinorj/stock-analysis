@@ -11,3 +11,7 @@ gatherUsageStats = false
 
 [server]
 maxUploadSize = 5
+
+[ui]
+# Show all pages in sidebar without "View X more" collapse
+hideSidebarNav = false

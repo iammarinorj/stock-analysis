@@ -95,6 +95,8 @@ st.divider()
 # ---- Key metrics, side by side, with a winner mark ----
 ui.section_head("Key metrics", "✓ marks the more favorable side per row.")
 
+# Build rows first so we can count wins before rendering
+
 def _pct(v):  # decimal -> %
     return f"{v*100:.1f}%" if isinstance(v, (int, float)) else "—"
 def _x(v):
@@ -133,6 +135,14 @@ for label, key, fmt, hib in METRICS:
         else:
             b_win = " ✓"
     rows.append({"metric": label, "a": fmt(va) + a_win, "b": fmt(vb) + b_win})
+
+# Winner summary line
+a_wins = sum(1 for r in rows if "✓" in r.get("a", ""))
+b_wins = sum(1 for r in rows if "✓" in r.get("b", ""))
+if a_wins != b_wins:
+    winner = sym_a if a_wins > b_wins else sym_b
+    loser = sym_b if a_wins > b_wins else sym_a
+    st.success(f"📊 **{winner} wins on {max(a_wins, b_wins)} of {len(rows)} metrics** vs {loser}.")
 
 ui.glass_table(
     [{"key": "metric", "label": "Metric"},

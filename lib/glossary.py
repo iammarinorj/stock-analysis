@@ -557,8 +557,15 @@ def is_explain_mode() -> bool:
     return st.session_state.explain_mode
 
 
+def is_simple_mode() -> bool:
+    """True if Simple Mode toggle is on. Defaults to False."""
+    if "simple_mode" not in st.session_state:
+        st.session_state.simple_mode = False
+    return st.session_state.simple_mode
+
+
 def explain_toggle_sidebar():
-    """Render the Explain Mode toggle in sidebar. Call from every page."""
+    """Render the Explain Mode and Simple Mode toggles in sidebar. Call from every page."""
     with st.sidebar:
         em = st.toggle(
             "🎓 Explain Mode",
@@ -566,8 +573,18 @@ def explain_toggle_sidebar():
             help="Plain-English subtitles and 'what this means' panels for every section.",
         )
         st.session_state.explain_mode = em
-        if em:
+        sm = st.toggle(
+            "🔤 Simple Mode",
+            value=is_simple_mode(),
+            help="Streamlined view — fewer metrics, plain labels, key takeaways up front.",
+        )
+        st.session_state.simple_mode = sm
+        if em and sm:
+            st.caption("Beginner-friendly + simplified view.")
+        elif em:
             st.caption("Beginner-friendly explanations are on.")
+        elif sm:
+            st.caption("Simplified view — essentials only.")
         else:
             st.caption("Pro mode — minimal hand-holding.")
 

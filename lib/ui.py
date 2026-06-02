@@ -230,6 +230,14 @@ p, li, div, span, label { color: var(--text); font-size:14.5px; line-height:1.55
 
 /* Sidebar */
 [data-testid="stSidebar"] { background-color: var(--surface-alt) !important; border-right:1px solid var(--border) !important; -webkit-backdrop-filter: var(--blur) !important; backdrop-filter: var(--blur) !important; }
+/* Force all sidebar nav pages visible — no "View X more" collapse */
+[data-testid="stSidebarNav"] ul { max-height: none !important; overflow: visible !important; }
+[data-testid="stSidebarNav"] li { display: list-item !important; }
+[data-testid="stSidebarNav"] button[kind="header"] { display: none !important; }
+[data-testid="stSidebarNav"] details { display: contents !important; }
+[data-testid="stSidebarNav"] details > summary { display: none !important; }
+[data-testid="stSidebarNav"] details[open] > ul { display: block !important; }
+[data-testid="stSidebarNav"] details > ul { display: block !important; }
 /* Active page highlight in Streamlit's nav */
 [data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="page"] {
   background: var(--accent-bg) !important; color: var(--accent) !important; font-weight:600 !important;
@@ -775,3 +783,53 @@ def tone_from_pct(v: float | None, threshold_pos: float = 0, threshold_neg: floa
     if v > threshold_pos: return "pos"
     if v < threshold_neg: return "neg"
     return ""
+
+
+def thesis_card(thesis: dict, grade_bar: dict, bottom_line: str, simple_mode: bool = False):
+    """Render the structured investment thesis card with grade bar and bottom-line summary."""
+    stance = thesis.get("stance", {})
+    color_map = {"darkgreen": "#0a5f3c", "green": "#16a34a", "amber": "#d97706", "red": "#dc2626"}
+    accent = color_map.get(stance.get("color", ""), "#6b7280")
+
+    # Stance + grade bar + bottom line
+    st.markdown(f'''
+    <div style="border-left:4px solid {accent}; padding:16px 20px; background:var(--surface); border-radius:0 12px 12px 0; margin-bottom:16px; box-shadow:var(--shadow)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+            <span style="font-size:24px;font-weight:700;color:{accent}">{stance.get("label", "WATCH")}</span>
+            <span style="font-size:13px;color:var(--text-muted)">&mdash; {stance.get("rationale", "")}</span>
+        </div>
+        <div style="display:flex;gap:24px;margin-bottom:16px;font-size:13px">
+            <span>{grade_bar["valuation"]["emoji"]} Valuation: <b>{grade_bar["valuation"]["grade"]}</b></span>
+            <span>{grade_bar["quality"]["emoji"]} Quality: <b>{grade_bar["quality"]["grade"]}</b></span>
+            <span>{grade_bar["momentum"]["emoji"]} Momentum: <b>{grade_bar["momentum"]["grade"]}</b></span>
+        </div>
+        <div style="font-size:14px;line-height:1.6;color:var(--text);margin-bottom:16px">{bottom_line}</div>
+    </div>
+    ''', unsafe_allow_html=True)
+
+    # Bull/Bear columns
+    if not simple_mode:
+        bc, brc = st.columns(2)
+        with bc:
+            st.markdown("**✅ Bull case**")
+            for b in thesis.get("bull", []):
+                st.markdown(f"- {b}")
+        with brc:
+            st.markdown("**❌ Bear case**")
+            for b in thesis.get("bear", []):
+                st.markdown(f"- {b}")
+        if thesis.get("breaks_if"):
+            st.markdown("**⚡ Thesis breaks if:**")
+            for b in thesis["breaks_if"]:
+                st.markdown(f"- {b}")
+    else:
+        # Simple mode: show abbreviated bull/bear
+        bc, brc = st.columns(2)
+        with bc:
+            st.markdown("**✅ Reasons to buy**")
+            for b in thesis.get("bull", [])[:3]:
+                st.markdown(f"- {b}")
+        with brc:
+            st.markdown("**❌ Reasons to wait**")
+            for b in thesis.get("bear", [])[:3]:
+                st.markdown(f"- {b}")

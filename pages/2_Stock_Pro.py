@@ -251,19 +251,33 @@ elif _mkt_cap and _mkt_cap < 300_000_000:
         "Do extra due diligence on management and financials."
     )
 
-# ----- Tab labels (smart based on Explain Mode) -----
-labels = {
-    "overview": gloss.smart_label("📋 Overview", "📋 Overview"),
-    "profiles": gloss.smart_label("🎯 Multi-Style", "🎯 Investor Lenses"),
-    "sector": gloss.smart_label("🏛️ Sector-Relative", "🏛️ Fair by Sector"),
-    "trends": gloss.smart_label("📈 Trends (5yr)", "📈 5-Year History"),
-    "quality": gloss.smart_label("🛡️ Quality Flags", "🛡️ Safety Checks"),
-    "val": gloss.smart_label("💰 Valuation", "💰 What's it Worth?"),
-    "thesis": gloss.smart_label("📝 Bull/Bear", "📝 Why Buy or Sell?"),
-    "deep": gloss.smart_label("🔬 Deep-dive", "🔬 Full Details"),
-    "earn": gloss.smart_label("📅 Earnings", "📅 Earnings History"),
-    "src": gloss.smart_label("🔗 Sources", "🔗 Where to Verify"),
-}
+# ----- Tab labels (smart based on Explain Mode / Simple Mode) -----
+if gloss.is_simple_mode():
+    labels = {
+        "overview": "📋 Overview",
+        "profiles": "🎯 Who would buy this?",
+        "sector": "🏛️ vs Competitors",
+        "trends": "📈 5-Year History",
+        "quality": "🛡️ Red Flags",
+        "val": "💰 Cheap or Expensive?",
+        "thesis": "📝 Should I Buy?",
+        "deep": "🔬 Full Details",
+        "earn": "📅 Earnings",
+        "src": "🔗 Sources",
+    }
+else:
+    labels = {
+        "overview": gloss.smart_label("📋 Overview", "📋 Overview"),
+        "profiles": gloss.smart_label("🎯 Multi-Style", "🎯 Investor Lenses"),
+        "sector": gloss.smart_label("🏛️ Sector-Relative", "🏛️ Fair by Sector"),
+        "trends": gloss.smart_label("📈 Trends (5yr)", "📈 5-Year History"),
+        "quality": gloss.smart_label("🛡️ Quality Flags", "🛡️ Safety Checks"),
+        "val": gloss.smart_label("💰 Valuation", "💰 What's it Worth?"),
+        "thesis": gloss.smart_label("📝 Bull/Bear", "📝 Why Buy or Sell?"),
+        "deep": gloss.smart_label("🔬 Deep-dive", "🔬 Full Details"),
+        "earn": gloss.smart_label("📅 Earnings", "📅 Earnings History"),
+        "src": gloss.smart_label("🔗 Sources", "🔗 Where to Verify"),
+    }
 
 (tab_overview, tab_profiles, tab_sector, tab_trends, tab_quality, tab_val,
  tab_thesis, tab_deep, tab_earn, tab_sources) = st.tabs(list(labels.values()))
@@ -281,6 +295,19 @@ with tab_overview:
     _hist5y_ov = data.get_price_history(ticker, period="5y")
     _vpct_ov = val_mod.valuation_percentile(_hist5y_ov, diag.get("financials") or {},
                                             quote.get("pe_trailing") or quote.get("pe_forward"))
+
+    # Grade bar + thesis card (at the top of Overview)
+    from lib.narrative import compute_grade_bar, bottom_line_summary
+    _grade_bar = compute_grade_bar(quote, tr, qflags, rdcf)
+    _bottom_line = bottom_line_summary(quote, tr, thesis, rdcf, _grade_bar)
+    ui.thesis_card(thesis, _grade_bar, _bottom_line, simple_mode=gloss.is_simple_mode())
+
+    # "What would you need to believe?" line
+    if rdcf and rdcf.get("implied_growth") is not None:
+        _ig = rdcf["implied_growth"] * 100
+        _rg = (quote.get("rev_growth") or 0) * 100
+        st.info(f"💡 **What you'd need to believe:** To buy {ticker} at ${quote['price']:.0f}, you need to believe it can grow **{_ig:.0f}% annually** for a decade. It grew **{_rg:.1f}%** last year.")
+
     summary_paras = narr_mod.executive_summary(quote, tr, thesis, _vpct_ov, qflags,
                                                _tech_ov, _opt_ov, rdcf)
     ui.section_head("The read", "A research-note synthesis from live fundamentals, technicals, options, and consensus.")
@@ -289,8 +316,6 @@ with tab_overview:
             st.markdown(para)
 
     # Key metrics grid
-    ui.section_head("Key metrics", "What an investor should know before going deeper.")
-
     def _km(v, kind="num", d=2):
         if v is None or (isinstance(v, float) and v != v):
             return "—"
@@ -302,91 +327,100 @@ with tab_overview:
             return f"{v:.1f}x"
         return f"{v:.{d}f}"
 
-    row1 = st.columns(4)
-    with row1[0]:
-        ui.kpi_tile("Market cap", ui.fmt_money(quote.get("market_cap")), "")
-    with row1[1]:
-        ui.kpi_tile("Fwd P/E", _km(quote.get("pe_forward"), "x"),
-                    f"Trailing {_km(quote.get('pe_trailing'),'x')}")
-    with row1[2]:
-        ui.kpi_tile("PEG", _km(quote.get("peg"), "num"), "growth-adjusted")
-    with row1[3]:
-        ui.kpi_tile("EV/EBITDA", _km(quote.get("ev_ebitda"), "x"), "")
+    def _render_key_metrics():
+        """Render the key metrics grid rows."""
+        row1 = st.columns(4)
+        with row1[0]:
+            ui.kpi_tile("Market cap", ui.fmt_money(quote.get("market_cap")), "")
+        with row1[1]:
+            ui.kpi_tile("Fwd P/E", _km(quote.get("pe_forward"), "x"),
+                        f"Trailing {_km(quote.get('pe_trailing'),'x')}")
+        with row1[2]:
+            ui.kpi_tile("PEG", _km(quote.get("peg"), "num"), "growth-adjusted")
+        with row1[3]:
+            ui.kpi_tile("EV/EBITDA", _km(quote.get("ev_ebitda"), "x"), "")
 
-    # Quarterly + Annual Revenue / Net Income (size numbers)
-    _snap = fin_mod.get_period_snapshot(diag.get("financials") or {}, quote=quote)
-    row_size = st.columns(4)
-    with row_size[0]:
-        ui.kpi_tile("Revenue (Q)", ui.fmt_money(_snap["q_rev"]),
-                    _snap["q_rev_period"] or "latest quarter")
-    with row_size[1]:
-        _ni_tone = "pos" if (_snap["q_ni"] or 0) > 0 else ("neg" if _snap["q_ni"] is not None and _snap["q_ni"] < 0 else "")
-        ui.kpi_tile("Net income (Q)", ui.fmt_money(_snap["q_ni"]),
-                    _snap["q_ni_period"] or "latest quarter", _ni_tone)
-    with row_size[2]:
-        ui.kpi_tile("Revenue (FY)", ui.fmt_money(_snap["fy_rev"]),
-                    _snap["fy_rev_period"] or "latest fiscal year")
-    with row_size[3]:
-        _fy_ni_tone = "pos" if (_snap["fy_ni"] or 0) > 0 else ("neg" if _snap["fy_ni"] is not None and _snap["fy_ni"] < 0 else "")
-        ui.kpi_tile("Net income (FY)", ui.fmt_money(_snap["fy_ni"]),
-                    _snap["fy_ni_period"] or "latest fiscal year", _fy_ni_tone)
+        # Quarterly + Annual Revenue / Net Income (size numbers)
+        _snap = fin_mod.get_period_snapshot(diag.get("financials") or {}, quote=quote)
+        row_size = st.columns(4)
+        with row_size[0]:
+            ui.kpi_tile("Revenue (Q)", ui.fmt_money(_snap["q_rev"]),
+                        _snap["q_rev_period"] or "latest quarter")
+        with row_size[1]:
+            _ni_tone = "pos" if (_snap["q_ni"] or 0) > 0 else ("neg" if _snap["q_ni"] is not None and _snap["q_ni"] < 0 else "")
+            ui.kpi_tile("Net income (Q)", ui.fmt_money(_snap["q_ni"]),
+                        _snap["q_ni_period"] or "latest quarter", _ni_tone)
+        with row_size[2]:
+            ui.kpi_tile("Revenue (FY)", ui.fmt_money(_snap["fy_rev"]),
+                        _snap["fy_rev_period"] or "latest fiscal year")
+        with row_size[3]:
+            _fy_ni_tone = "pos" if (_snap["fy_ni"] or 0) > 0 else ("neg" if _snap["fy_ni"] is not None and _snap["fy_ni"] < 0 else "")
+            ui.kpi_tile("Net income (FY)", ui.fmt_money(_snap["fy_ni"]),
+                        _snap["fy_ni_period"] or "latest fiscal year", _fy_ni_tone)
 
-    row2 = st.columns(4)
-    with row2[0]:
-        ui.kpi_tile("ROE", _km(quote.get("roe"), "pct"), "return on equity",
-                    "pos" if (quote.get("roe") or 0) > 0.15 else "")
-    with row2[1]:
-        ui.kpi_tile("Operating margin", _km(quote.get("operating_margin"), "pct"), "")
-    with row2[2]:
-        rgv = quote.get("rev_growth")
-        ui.kpi_tile("Revenue growth", _km(rgv, "pct"), "YoY",
-                    "pos" if (rgv or 0) > 0 else "neg" if rgv is not None else "")
-    with row2[3]:
-        dy = quote.get("div_yield")
-        ui.kpi_tile("Dividend yield", _km(dy, "pct") if dy else "—", "")
-    row3 = st.columns(4)
-    with row3[0]:
-        ui.kpi_tile("Free cash flow", ui.fmt_money(quote.get("fcf")), "TTM")
-    with row3[1]:
-        ui.kpi_tile("Gross margin", _km(quote.get("gross_margin"), "pct"), "")
-    with row3[2]:
-        ui.kpi_tile("Beta", _km(quote.get("beta"), "num"), "volatility vs market")
-    with row3[3]:
-        rsi = quote.get("rsi_14")
-        rsi_tone = "neg" if (rsi or 50) > 70 else "pos" if (rsi or 50) < 30 else ""
-        ui.kpi_tile("RSI (14)", _km(rsi, "num", 0) if rsi else "—",
-                    "overbought" if (rsi or 0) > 70 else "oversold" if (0 < (rsi or 0) < 30) else "neutral",
-                    rsi_tone)
+        row2 = st.columns(4)
+        with row2[0]:
+            ui.kpi_tile("ROE", _km(quote.get("roe"), "pct"), "return on equity",
+                        "pos" if (quote.get("roe") or 0) > 0.15 else "")
+        with row2[1]:
+            ui.kpi_tile("Operating margin", _km(quote.get("operating_margin"), "pct"), "")
+        with row2[2]:
+            rgv = quote.get("rev_growth")
+            ui.kpi_tile("Revenue growth", _km(rgv, "pct"), "YoY",
+                        "pos" if (rgv or 0) > 0 else "neg" if rgv is not None else "")
+        with row2[3]:
+            dy = quote.get("div_yield")
+            ui.kpi_tile("Dividend yield", _km(dy, "pct") if dy else "—", "")
+        row3 = st.columns(4)
+        with row3[0]:
+            ui.kpi_tile("Free cash flow", ui.fmt_money(quote.get("fcf")), "TTM")
+        with row3[1]:
+            ui.kpi_tile("Gross margin", _km(quote.get("gross_margin"), "pct"), "")
+        with row3[2]:
+            ui.kpi_tile("Beta", _km(quote.get("beta"), "num"), "volatility vs market")
+        with row3[3]:
+            rsi = quote.get("rsi_14")
+            rsi_tone = "neg" if (rsi or 50) > 70 else "pos" if (rsi or 50) < 30 else ""
+            ui.kpi_tile("RSI (14)", _km(rsi, "num", 0) if rsi else "—",
+                        "overbought" if (rsi or 0) > 70 else "oversold" if (0 < (rsi or 0) < 30) else "neutral",
+                        rsi_tone)
 
-    # Forward estimates row
-    _eps_fwd = quote.get("eps_forward")
-    _eps_trail = quote.get("eps_trailing")
-    _tgt_med = quote.get("target_median")
-    _tgt_lo = quote.get("target_low")
-    _tgt_hi = quote.get("target_high")
-    _n_ana = quote.get("n_analysts")
-    if _eps_fwd is not None or _tgt_med is not None or _n_ana:
-        row_fwd = st.columns(4)
-        with row_fwd[0]:
-            _eps_sub = f"Trailing ${_eps_trail:.2f}" if _eps_trail is not None else ""
-            ui.kpi_tile("Forward EPS",
-                        f"${_eps_fwd:.2f}" if _eps_fwd is not None else "—",
-                        _eps_sub)
-        with row_fwd[1]:
-            _tgt_range = f"${_tgt_lo:.0f} – ${_tgt_hi:.0f}" if (_tgt_lo and _tgt_hi) else ""
-            _tgt_upside = ""
-            if _tgt_med and quote.get("price"):
-                _tgt_upside = f"{((_tgt_med / quote['price']) - 1) * 100:+.1f}% upside"
-            ui.kpi_tile("Analyst target (median)",
-                        f"${_tgt_med:.2f}" if _tgt_med else "—",
-                        f"{_tgt_range}  {_tgt_upside}".strip())
-        with row_fwd[2]:
-            ui.kpi_tile("# Analysts", str(_n_ana) if _n_ana else "—", "covering this stock")
-        with row_fwd[3]:
-            _rev_est = quote.get("revenue_estimate")
-            ui.kpi_tile("Revenue estimate",
-                        ui.fmt_money(_rev_est) if _rev_est else "—",
-                        "consensus next period" if _rev_est else "")
+        # Forward estimates row
+        _eps_fwd = quote.get("eps_forward")
+        _eps_trail = quote.get("eps_trailing")
+        _tgt_med = quote.get("target_median")
+        _tgt_lo = quote.get("target_low")
+        _tgt_hi = quote.get("target_high")
+        _n_ana = quote.get("n_analysts")
+        if _eps_fwd is not None or _tgt_med is not None or _n_ana:
+            row_fwd = st.columns(4)
+            with row_fwd[0]:
+                _eps_sub = f"Trailing ${_eps_trail:.2f}" if _eps_trail is not None else ""
+                ui.kpi_tile("Forward EPS",
+                            f"${_eps_fwd:.2f}" if _eps_fwd is not None else "—",
+                            _eps_sub)
+            with row_fwd[1]:
+                _tgt_range = f"${_tgt_lo:.0f} – ${_tgt_hi:.0f}" if (_tgt_lo and _tgt_hi) else ""
+                _tgt_upside = ""
+                if _tgt_med and quote.get("price"):
+                    _tgt_upside = f"{((_tgt_med / quote['price']) - 1) * 100:+.1f}% upside"
+                ui.kpi_tile("Analyst target (median)",
+                            f"${_tgt_med:.2f}" if _tgt_med else "—",
+                            f"{_tgt_range}  {_tgt_upside}".strip())
+            with row_fwd[2]:
+                ui.kpi_tile("# Analysts", str(_n_ana) if _n_ana else "—", "covering this stock")
+            with row_fwd[3]:
+                _rev_est = quote.get("revenue_estimate")
+                ui.kpi_tile("Revenue estimate",
+                            ui.fmt_money(_rev_est) if _rev_est else "—",
+                            "consensus next period" if _rev_est else "")
+
+    if gloss.is_simple_mode():
+        with st.expander("📊 Detailed metrics", expanded=False):
+            _render_key_metrics()
+    else:
+        ui.section_head("Key metrics", "What an investor should know before going deeper.")
+        _render_key_metrics()
 
     # Consensus + 52-week range
     cc1, cc2 = st.columns([1, 1])

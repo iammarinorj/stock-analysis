@@ -401,3 +401,263 @@ def _one_line_summary(name: str, symbol: str, stance: dict, best: dict) -> str:
         f"{name} ({symbol}): {stance['label']} — "
         f"best fit is {best['profile_name']} ({best['pct']*100:.0f}%). {stance['rationale']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Three-pillar grade bar
+# ---------------------------------------------------------------------------
+
+def compute_grade_bar(
+    quote: dict,
+    trends: dict,
+    quality_flags: dict | None = None,
+    reverse_dcf: dict | None = None,
+) -> dict[str, dict]:
+    """Return a three-pillar assessment: valuation, quality, momentum.
+
+    Each pillar has: grade (str), color (str), emoji (str), detail (str).
+    """
+
+    # --- Valuation ---
+    val_grade, val_color, val_emoji, val_detail = "Fair", "yellow", "\U0001f7e1", ""
+    implied_growth = None
+    if reverse_dcf and reverse_dcf.get("implied_growth") is not None:
+        implied_growth = reverse_dcf["implied_growth"]
+
+    pe_fwd = _safe(quote.get("pe_forward"))
+    pe_trail = _safe(quote.get("pe_trailing"))
+    pe = pe_fwd or pe_trail
+
+    # Determine valuation grade
+    expensive_signals = 0
+    cheap_signals = 0
+    detail_parts: list[str] = []
+
+    if implied_growth is not None:
+        if implied_growth > 0.25:
+            expensive_signals += 2
+            detail_parts.append(f"needs {implied_growth*100:.0f}%/yr growth")
+        elif implied_growth < 0.08:
+            cheap_signals += 2
+            detail_parts.append(f"needs only {implied_growth*100:.0f}%/yr growth")
+        else:
+            detail_parts.append(f"implies {implied_growth*100:.0f}%/yr growth")
+
+    if pe is not None and pe > 0:
+        if pe > 40:
+            expensive_signals += 1
+            detail_parts.append(f"P/E {pe:.0f}x")
+        elif pe < 15:
+            cheap_signals += 1
+            detail_parts.append(f"P/E {pe:.0f}x")
+        else:
+            detail_parts.append(f"P/E {pe:.0f}x")
+
+    if expensive_signals >= 2:
+        val_grade, val_color, val_emoji = "Expensive", "red", "\U0001f534"
+    elif cheap_signals >= 2:
+        val_grade, val_color, val_emoji = "Cheap", "green", "\U0001f7e2"
+    elif expensive_signals >= 1 and cheap_signals == 0:
+        val_grade, val_color, val_emoji = "Expensive", "red", "\U0001f534"
+    elif cheap_signals >= 1 and expensive_signals == 0:
+        val_grade, val_color, val_emoji = "Cheap", "green", "\U0001f7e2"
+
+    val_detail = ", ".join(detail_parts) if detail_parts else "insufficient data"
+
+    # --- Quality ---
+    q_grade, q_color, q_emoji, q_detail = "OK", "yellow", "\U0001f7e1", ""
+    piotroski_score = None
+    roe = _safe(quote.get("roe"))
+    gm = _safe(quote.get("gross_margin"))
+    om = _safe(quote.get("operating_margin"))
+
+    if quality_flags:
+        ps = quality_flags.get("piotroski", {}).get("score")
+        if ps is not None:
+            piotroski_score = ps
+
+    q_parts: list[str] = []
+    strong_signals = 0
+    weak_signals = 0
+
+    if piotroski_score is not None:
+        q_parts.append(f"Piotroski {piotroski_score}/9")
+        if piotroski_score >= 7:
+            strong_signals += 1
+        elif piotroski_score <= 3:
+            weak_signals += 1
+
+    if roe is not None:
+        q_parts.append(f"ROE {roe*100:.0f}%")
+        if roe > 0.15:
+            strong_signals += 1
+        elif roe < 0.05:
+            weak_signals += 1
+
+    # Check margin trends
+    tr_dict = trends.get("trends", {}) if trends else {}
+    margins_rising = any(
+        tr_dict.get(m, {}).get("direction", "").startswith("rising")
+        for m in ("gross_margin", "operating_margin")
+    )
+    margins_falling = any(
+        tr_dict.get(m, {}).get("direction", "").startswith("falling")
+        for m in ("gross_margin", "operating_margin")
+    )
+    if margins_rising:
+        q_parts.append("margins rising")
+        strong_signals += 1
+    elif margins_falling:
+        q_parts.append("margins falling")
+        weak_signals += 1
+
+    if strong_signals >= 2 and weak_signals == 0:
+        q_grade, q_color, q_emoji = "Strong", "green", "\U0001f7e2"
+    elif weak_signals >= 2 or (weak_signals >= 1 and strong_signals == 0):
+        q_grade, q_color, q_emoji = "Weak", "red", "\U0001f534"
+
+    q_detail = ", ".join(q_parts) if q_parts else "insufficient data"
+
+    # --- Momentum ---
+    m_grade, m_color, m_emoji, m_detail = "Mixed", "yellow", "\U0001f7e1", ""
+    price = _safe(quote.get("price"))
+    dma200 = _safe(quote.get("dma_200"))
+    dma50 = _safe(quote.get("dma_50"))
+    rsi = _safe(quote.get("rsi_14"))
+
+    m_parts: list[str] = []
+    above_200 = False
+    below_200 = False
+
+    if price and dma200:
+        if price > dma200:
+            above_200 = True
+            m_parts.append("above 200DMA")
+        else:
+            below_200 = True
+            m_parts.append("below 200DMA")
+
+    if price and dma50 and dma200:
+        if price > dma50 > dma200:
+            m_parts.append("Stage 2")
+
+    if rsi is not None:
+        m_parts.append(f"RSI {rsi:.0f}")
+
+    if above_200 and (rsi is None or 30 <= rsi <= 70):
+        m_grade, m_color, m_emoji = "Uptrend", "green", "\U0001f7e2"
+    elif above_200 and rsi is not None and rsi > 70:
+        m_grade, m_color, m_emoji = "Overbought", "yellow", "\U0001f7e1"
+    elif below_200:
+        m_grade, m_color, m_emoji = "Downtrend", "red", "\U0001f534"
+
+    m_detail = ", ".join(m_parts) if m_parts else "insufficient data"
+
+    return {
+        "valuation": {"grade": val_grade, "color": val_color, "emoji": val_emoji, "detail": val_detail},
+        "quality": {"grade": q_grade, "color": q_color, "emoji": q_emoji, "detail": q_detail},
+        "momentum": {"grade": m_grade, "color": m_color, "emoji": m_emoji, "detail": m_detail},
+    }
+
+
+def bottom_line_summary(
+    quote: dict,
+    trends: dict,
+    thesis: dict,
+    reverse_dcf: dict | None = None,
+    grade_bar: dict | None = None,
+) -> str:
+    """Return a 2-3 sentence plain-English bottom-line summary of the stock.
+
+    Uses data from quote, trends, thesis, and reverse_dcf. Factual, no jargon.
+    """
+    name = quote.get("name") or quote.get("symbol", "")
+    symbol = quote.get("symbol", "")
+    price = _safe(quote.get("price"))
+    roe = _safe(quote.get("roe"))
+    gm = _safe(quote.get("gross_margin"))
+    om = _safe(quote.get("operating_margin"))
+    rev_growth = _safe(quote.get("rev_growth"))
+    rec = (quote.get("recommend") or "").replace("_", " ").strip().upper()
+    piotroski = None
+    if thesis.get("stance"):
+        stance_label = thesis["stance"].get("label", "WATCH")
+    else:
+        stance_label = "WATCH"
+
+    # Quality description
+    quality_bits: list[str] = []
+    if gm is not None and gm > 0.40:
+        quality_bits.append("strong margins")
+    if roe is not None and roe > 0.15:
+        quality_bits.append(f"ROE {roe*100:.0f}%")
+
+    # Check for buybacks from trends
+    sh_change = (trends.get("metrics", {}) if trends else {}).get("shares_change", [])
+    recent_sh = [v for v in (sh_change or [])[:3] if v is not None]
+    if recent_sh and sum(recent_sh) / len(recent_sh) < -0.005:
+        quality_bits.append("buybacks")
+
+    # Piotroski from grade_bar detail
+    if grade_bar and "Piotroski" in grade_bar.get("quality", {}).get("detail", ""):
+        quality_bits.append(grade_bar["quality"]["detail"].split(",")[0].strip())
+
+    # Build sentence 1: quality assessment
+    parts: list[str] = []
+    if quality_bits:
+        q_str = ", ".join(quality_bits)
+        if grade_bar and grade_bar["valuation"]["grade"] == "Expensive":
+            parts.append(f"{name} is a high-quality business ({q_str}) trading at a premium")
+        elif grade_bar and grade_bar["valuation"]["grade"] == "Cheap":
+            parts.append(f"{name} is a quality business ({q_str}) trading at a discount")
+        else:
+            parts.append(f"{name} shows solid fundamentals ({q_str})")
+    else:
+        if grade_bar and grade_bar["quality"]["grade"] == "Weak":
+            parts.append(f"{name} has weak fundamentals")
+        else:
+            parts.append(f"{name} has mixed fundamentals")
+
+    # Build sentence 2: valuation context from reverse DCF
+    if reverse_dcf and reverse_dcf.get("implied_growth") is not None:
+        ig = reverse_dcf["implied_growth"] * 100
+        rg = (rev_growth or 0) * 100
+        if price:
+            parts.append(
+                f"the market needs {ig:.0f}% annual growth for a decade to justify "
+                f"today's price of ${price:.0f}"
+            )
+        if rev_growth is not None:
+            if rg > ig:
+                parts.append(f"it grew {rg:.0f}% last year, exceeding the bar")
+            elif abs(rg - ig) < 3:
+                parts.append(f"it grew {rg:.0f}% last year, roughly matching expectations")
+            else:
+                parts.append(f"it grew {rg:.0f}% last year, so you're paying up for acceleration")
+
+    # Build sentence 3: momentum + consensus
+    momentum_bits: list[str] = []
+    if grade_bar:
+        mg = grade_bar["momentum"]["grade"]
+        if mg == "Uptrend":
+            momentum_bits.append("in an uptrend")
+        elif mg == "Downtrend":
+            momentum_bits.append("in a downtrend")
+        else:
+            momentum_bits.append("showing mixed momentum")
+
+    if rec and rec not in ("—", ""):
+        momentum_bits.append(f"analyst consensus at {rec}")
+
+    if momentum_bits:
+        parts.append("the stock is " + " with ".join(momentum_bits))
+
+    # Assemble into sentences
+    if len(parts) >= 3:
+        result = f"{parts[0]} — {parts[1]}. {parts[2].capitalize()}. {parts[3].capitalize()}." if len(parts) >= 4 else f"{parts[0]} — {parts[1]}. {parts[2].capitalize()}."
+    elif len(parts) == 2:
+        result = f"{parts[0]} — {parts[1]}."
+    else:
+        result = f"{parts[0]}."
+
+    return result
