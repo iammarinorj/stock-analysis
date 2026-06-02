@@ -17,6 +17,29 @@ from lib import http as _http
 
 
 # ---------------------------------------------------------------------------
+# yfinance cloud-deployment fix: Yahoo Finance aggressively blocks datacenter
+# IPs (Streamlit Cloud, Heroku, AWS, etc.). yfinance 1.4+ uses curl_cffi to
+# impersonate Chrome, which bypasses the block. If curl_cffi isn't installed,
+# yfinance falls back to plain requests — which gets blocked, causing .info
+# to return empty dicts and all fundamentals to show "—".
+#
+# Fix: ensure curl_cffi is in requirements.txt. As a belt-and-suspenders
+# fallback, also set the UA on yfinance's fallback path.
+# ---------------------------------------------------------------------------
+try:
+    _BROWSER_UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
+    if hasattr(yf, "_http"):
+        # Patch the fallback UA used when curl_cffi is not available
+        if hasattr(yf._http, "_FALLBACK_USER_AGENT"):
+            yf._http._FALLBACK_USER_AGENT = _BROWSER_UA
+except Exception:
+    pass
+
+# ---------------------------------------------------------------------------
 # Stock data via yfinance
 # ---------------------------------------------------------------------------
 
