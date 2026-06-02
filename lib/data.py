@@ -37,24 +37,20 @@ def _warm_yf_cookies():
         )
         s = _req.Session()
         s.headers["User-Agent"] = ua
-        # Hit the consent page to get cookies
         s.get("https://fc.yahoo.com", timeout=10)
-        # Get the crumb
         crumb_resp = s.get(
             "https://query2.finance.yahoo.com/v1/test/getcrumb",
             timeout=10,
         )
         if crumb_resp.status_code == 200 and crumb_resp.text:
-            # Inject cookies into yfinance's cookie jar
             jar = yf._http.cookie_jar()
             for c in s.cookies:
                 jar.set_cookie(c)
     except Exception:
-        pass  # graceful — local installs with curl_cffi don't need this
+        pass
 
 _warm_yf_cookies()
 
-# Also patch the fallback UA
 try:
     if hasattr(yf, "_http") and hasattr(yf._http, "_FALLBACK_USER_AGENT"):
         yf._http._FALLBACK_USER_AGENT = (
@@ -64,6 +60,146 @@ try:
         )
 except Exception:
     pass
+
+
+def _enrich_quote_from_statements(quote: dict, symbol: str) -> dict:
+    """Fill in missing .info fields from financial statements when Yahoo
+    blocks the .info endpoint (common on cloud/datacenter IPs).
+
+    Financial statements (.income_stmt, .balance_sheet) use a different Yahoo
+    API that is less aggressively rate-limited, so they usually work even when
+    .info returns empty.
+    """
+    # Only run if .info clearly failed (no market_cap, no sector)
+    if quote.get("market_cap") or quote.get("sector"):
+        return quote  # .info worked fine, nothing to patch
+
+    try:
+        t = yf.Ticker(symbol)
+
+        # Try to get basic info from fast_info (lighter endpoint)
+        try:
+            fi = t.fast_info
+            if hasattr(fi, "market_cap") and fi.market_cap:
+                quote["market_cap"] = float(fi.market_cap)
+            if hasattr(fi, "shares") and fi.shares:
+                quote["shares_out"] = float(fi.shares)
+        except Exception:
+            pass
+
+        # Get fundamentals from statements
+        try:
+            inc = t.income_stmt
+            bal = t.balance_sheet
+            cf = t.cashflow
+
+            if inc is not None and not inc.empty:
+                cur = inc.columns[0]
+                def _v(df, *names):
+                    if df is None or df.empty:
+                        return None
+                    for n in names:
+                        if n in df.index:
+                            v = df.loc[n, cur]
+                            if pd.notna(v):
+                                return float(v)
+                    return None
+
+                rev = _v(inc, "Total Revenue", "Operating Revenue")
+                ni = _v(inc, "Net Income", "Net Income Common Stockholders")
+                gp = _v(inc, "Gross Profit")
+                oi = _v(inc, "Operating Income")
+                ebitda = _v(inc, "EBITDA", "Normalized EBITDA")
+
+                if rev and not quote.get("revenue"):
+                    quote["revenue"] = rev
+                if ni and not quote.get("net_income"):
+                    quote["net_income"] = ni
+                if ebitda and not quote.get("ebitda"):
+                    quote["ebitda"] = ebitda
+                if rev and gp and not quote.get("gross_margin"):
+                    quote["gross_margin"] = gp / rev
+                if rev and oi and not quote.get("operating_margin"):
+                    quote["operating_margin"] = oi / rev
+                if rev and ni and not quote.get("profit_margin"):
+                    quote["profit_margin"] = ni / rev
+
+                # P/E from price / EPS
+                if ni and quote.get("price") and quote.get("shares_out"):
+                    eps = ni / quote["shares_out"]
+                    if eps > 0:
+                        quote.setdefault("pe_trailing", quote["price"] / eps)
+                        quote.setdefault("eps_trailing", eps)
+
+            if bal is not None and not bal.empty:
+                cur_b = bal.columns[0]
+                def _vb(df, *names):
+                    if df is None or df.empty:
+                        return None
+                    for n in names:
+                        if n in df.index:
+                            v = df.loc[n, cur_b]
+                            if pd.notna(v):
+                                return float(v)
+                    return None
+
+                equity = _vb(bal, "Stockholders Equity", "Common Stock Equity")
+                assets = _vb(bal, "Total Assets")
+                debt = _vb(bal, "Total Debt")
+                cash = _vb(bal, "Cash And Cash Equivalents")
+
+                if not quote.get("total_debt"):
+                    quote["total_debt"] = debt
+                if not quote.get("total_cash"):
+                    quote["total_cash"] = cash
+
+                if equity and ni and not quote.get("roe"):
+                    quote["roe"] = ni / equity
+                if quote.get("price") and equity and quote.get("shares_out"):
+                    bv_per_share = equity / quote["shares_out"]
+                    if bv_per_share > 0:
+                        quote.setdefault("pb", quote["price"] / bv_per_share)
+
+            if cf is not None and not cf.empty:
+                cur_c = cf.columns[0]
+                def _vc(*names):
+                    if cf is None or cf.empty:
+                        return None
+                    for n in names:
+                        if n in cf.index:
+                            v = cf.loc[n, cur_c]
+                            if pd.notna(v):
+                                return float(v)
+                    return None
+
+                fcf = _vc("Free Cash Flow")
+                ocf = _vc("Operating Cash Flow", "Cash Flow From Continuing Operating Activities")
+                if fcf and not quote.get("fcf"):
+                    quote["fcf"] = fcf
+                if ocf and not quote.get("ocf"):
+                    quote["ocf"] = ocf
+
+        except Exception:
+            pass
+
+        # Get name/sector from the ticker's info even if most fields are empty
+        try:
+            info = t.info or {}
+            if info.get("longName") and not quote.get("name"):
+                quote["name"] = info["longName"]
+            if info.get("shortName") and not quote.get("name"):
+                quote["name"] = info["shortName"]
+            if info.get("sector") and not quote.get("sector"):
+                quote["sector"] = info["sector"]
+            if info.get("industry") and not quote.get("industry"):
+                quote["industry"] = info["industry"]
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    return quote
 
 # ---------------------------------------------------------------------------
 # Stock data via yfinance
@@ -256,7 +392,7 @@ def get_quote(symbol: str) -> dict[str, Any]:
         else:
             div_yield = None
 
-        return {
+        quote = {
             "symbol": symbol.upper(),
             "name": info.get("longName") or info.get("shortName"),
             "price": price,
@@ -324,6 +460,13 @@ def get_quote(symbol: str) -> dict[str, Any]:
             "revenue_estimate": info.get("revenueEstimate"),
             "target_mean_price": info.get("targetMeanPrice"),
         }
+
+        # Cloud fallback: if .info returned empty (Yahoo 401 on datacenter IPs),
+        # fill in fundamentals from financial statements which use a less
+        # restricted API endpoint.
+        quote = _enrich_quote_from_statements(quote, symbol)
+        return quote
+
     except Exception as e:
         return {"error": str(e), "symbol": symbol.upper()}
 
