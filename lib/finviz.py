@@ -175,6 +175,59 @@ def merge_into_quote(yf_quote: dict, fv: dict) -> dict:
     # Use Finviz earnings date if yfinance is missing
     if not merged.get("next_earnings") and fv.get("earnings_date"):
         merged["next_earnings"] = fv["earnings_date"]
+
+    # Cloud fallback: when yfinance .info is blocked (Yahoo 401 on cloud IPs),
+    # many core fields are None. Finviz has them all — fill the gaps.
+    _fallbacks = {
+        # key in quote dict → key in Finviz dict
+        "sector": "sector",
+        "industry": "industry",
+        "country": "country",
+        "name": "symbol",  # at least show the ticker if name is missing
+        "market_cap": "market_cap",
+        "pe_forward": "forward_pe",
+        "pe_trailing": "pe",
+        "peg": "peg",
+        "pb": "pb",
+        "ev_ebitda": None,  # not directly in Finviz parsed fields
+        "beta": "beta",
+        "div_yield": "dividend_yield",
+        "roe": "roe",
+        "gross_margin": "gross_margin",
+        "operating_margin": "oper_margin",
+        "profit_margin": "profit_margin",
+        "rev_growth": "sales_qoq",
+        "avg_volume": "avg_volume",
+        "high_52w": "high_52w",
+        "low_52w": "low_52w",
+        "target_mean": "target_price",
+    }
+    for quote_key, fv_key in _fallbacks.items():
+        if fv_key and not merged.get(quote_key) and fv.get(fv_key) is not None:
+            merged[quote_key] = fv[fv_key]
+
+    # Compute EV/EBITDA from Finviz if missing
+    if not merged.get("ev_ebitda") and fv.get("market_cap") and merged.get("ebitda"):
+        debt = merged.get("total_debt") or 0
+        cash = merged.get("total_cash") or 0
+        ev = fv["market_cap"] + debt - cash
+        if merged["ebitda"] > 0:
+            merged["ev_ebitda"] = ev / merged["ebitda"]
+
+    # Analyst recommendation from Finviz (1=Strong Buy, 5=Sell)
+    if not merged.get("recommend") and fv.get("recommendation"):
+        score = fv["recommendation"]
+        if score <= 1.5:
+            merged["recommend"] = "strong_buy"
+        elif score <= 2.5:
+            merged["recommend"] = "buy"
+        elif score <= 3.5:
+            merged["recommend"] = "hold"
+        elif score <= 4.5:
+            merged["recommend"] = "sell"
+        else:
+            merged["recommend"] = "strong_sell"
+
     # Stash a flag so the UI knows enrichment ran
     merged["_finviz_enriched"] = True
     return merged
