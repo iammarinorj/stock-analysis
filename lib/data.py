@@ -17,25 +17,51 @@ from lib import http as _http
 
 
 # ---------------------------------------------------------------------------
-# yfinance cloud-deployment fix: Yahoo Finance aggressively blocks datacenter
-# IPs (Streamlit Cloud, Heroku, AWS, etc.). yfinance 1.4+ uses curl_cffi to
-# impersonate Chrome, which bypasses the block. If curl_cffi isn't installed,
-# yfinance falls back to plain requests — which gets blocked, causing .info
-# to return empty dicts and all fundamentals to show "—".
+# yfinance cloud-deployment fix: Yahoo Finance returns 401 on datacenter IPs
+# (Streamlit Cloud, Heroku, AWS) when curl_cffi isn't available. curl_cffi
+# impersonates Chrome at the TLS level, but it requires C compilation that
+# often fails on cloud build systems.
 #
-# Fix: ensure curl_cffi is in requirements.txt. As a belt-and-suspenders
-# fallback, also set the UA on yfinance's fallback path.
+# Fix: manually fetch a Yahoo crumb+cookie pair at startup using a browser UA,
+# then inject them into yfinance's cookie jar so all subsequent .info calls
+# authenticate properly — even with plain requests as the backend.
 # ---------------------------------------------------------------------------
+def _warm_yf_cookies():
+    """Pre-fetch Yahoo Finance authentication cookies for cloud environments."""
+    import requests as _req
+    try:
+        ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+        s = _req.Session()
+        s.headers["User-Agent"] = ua
+        # Hit the consent page to get cookies
+        s.get("https://fc.yahoo.com", timeout=10)
+        # Get the crumb
+        crumb_resp = s.get(
+            "https://query2.finance.yahoo.com/v1/test/getcrumb",
+            timeout=10,
+        )
+        if crumb_resp.status_code == 200 and crumb_resp.text:
+            # Inject cookies into yfinance's cookie jar
+            jar = yf._http.cookie_jar()
+            for c in s.cookies:
+                jar.set_cookie(c)
+    except Exception:
+        pass  # graceful — local installs with curl_cffi don't need this
+
+_warm_yf_cookies()
+
+# Also patch the fallback UA
 try:
-    _BROWSER_UA = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
-    )
-    if hasattr(yf, "_http"):
-        # Patch the fallback UA used when curl_cffi is not available
-        if hasattr(yf._http, "_FALLBACK_USER_AGENT"):
-            yf._http._FALLBACK_USER_AGENT = _BROWSER_UA
+    if hasattr(yf, "_http") and hasattr(yf._http, "_FALLBACK_USER_AGENT"):
+        yf._http._FALLBACK_USER_AGENT = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
 except Exception:
     pass
 
